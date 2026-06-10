@@ -2,6 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project
+
+`vtdf` (very-tiny-dag-framework) is a Python library for composing computation stages into a DAG.
+It is in an early, pre-implementation state: the public API in `src/vtdf/__init__.py` is mostly
+stubs, and `tests/test_dag.py` specifies the intended behavior. Treat the test as the spec.
+
+Intended design (from the test):
+- A `Stage(name, fn, ctx)` wraps a function `fn(ctx)`. `ctx` is an immutable object (a frozen
+  dataclass or dict) shared across stages.
+- Stages compose with `>>` (via `__rshift__`/`__rrshift__`). A `list[Stage]` on either side means
+  those stages run in parallel; `a >> b` means `b` depends on `a`. Composition builds a DAG and
+  returns a runnable handle exposing `.run()`.
+
+Python >=3.11, package layout is `src/`-based (`pythonpath = ["src", "tests"]`).
+
+## Commands
+
+- `make test` — run the test suite (`uv run pytest -vvs tests/`).
+- `uv run pytest tests/test_dag.py::test_dag` — run a single test.
+- `make index` (alias `make idx`) — rebuild the zoekt search index (required before `zcs` works,
+  and after significant file changes). `make cc` reindexes then launches `claude`.
+
 ## Code and File Search Tool: `zcs`
 
 **IMPORTANT: This project has a code and file search index. ALWAYS use the
