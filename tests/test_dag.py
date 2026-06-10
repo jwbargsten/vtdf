@@ -99,3 +99,46 @@ def test_cycle_detected():
 
     with pytest.raises(ValueError, match="cycle"):
         dag.run()
+
+
+def test_composition_is_non_destructive():
+    ctx = MyContext(0.3, 100)
+    _, _, mk = make_recorder()
+    a, b, c, d = (mk(n, ctx) for n in "abcd")
+
+    base = a >> b
+    left = base >> c
+    right = base >> d
+
+    assert set(base.deps) == {a, b}          # reused operand untouched
+    assert set(left.deps) == {a, b, c}
+    assert set(right.deps) == {a, b, d}
+
+
+def test_sub_dags_compose():
+    ctx = MyContext(0.3, 100)
+    order, _, mk = make_recorder()
+    a, b, c, d = (mk(n, ctx) for n in "abcd")
+
+    ((a >> b) >> (c >> d)).run()
+
+    assert order == ["a", "b", "c", "d"]
+
+
+def test_run_ctx_with_stage_override():
+    order, ctxs, mk = make_recorder()
+    a = mk("a", None)                        # no ctx -> takes run() ctx
+    b = mk("b", "override")                  # carries its own ctx
+
+    (a >> b).run(ctx="run")
+
+    assert ctxs == ["run", "override"]
+
+
+def test_run_returns_results_by_name():
+    a = Stage("a", lambda c: 1, None)
+    b = Stage("b", lambda c: 2, None)
+
+    out = (a >> b).run()
+
+    assert out == {"a": 1, "b": 2}
