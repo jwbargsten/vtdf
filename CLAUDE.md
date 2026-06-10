@@ -17,6 +17,8 @@ Intended design (from the test):
 
 Python >=3.11, package layout is `src/`-based (`pythonpath = ["src", "tests"]`).
 
+It is inspired by Airflow task syntax
+
 ## Commands
 
 - `make test` — run the test suite (`uv run pytest -vvs tests/`).
