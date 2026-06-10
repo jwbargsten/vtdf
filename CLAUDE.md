@@ -54,27 +54,6 @@ Skip zcs when:
 - The file path is already known — use Read directly.
 - Searching for uncommitted/just-edited code — the index may be stale; use Grep.
 
-## Project Structure
-
-Monorepo with two applications:
-
-- **`app/`** — SvelteKit frontend (static site). See `app/CLAUDE.md`.
-- **`api/`** — Scala 3 backend with ZIO. See `api/CLAUDE.md`.
-
-Vite dev server proxies `/api` and `/auth` to `localhost:8090`.
-
-TypeScript types shared between api and app are generated from Scala via `make gen` (runs from the repo root, `api/`, or `app/`). Output lands in `app/src/lib/api/model/` — regenerate after changing any DTO.
-
-`dist/` subdirectories (`infra-service/dist/`, `infra-system/dist/`, etc.) are gitignored and always regenerated — don't edit any files in them.
-
-## References
-
-External source checkouts under `external/` for reading — do not edit:
-
-- `external/zio-http` — zio-http source.
-- `external/scala-tstype` — Scala 3 → TypeScript type generator (`org.bargsten::scala-tstype`). Pipeline: `TsExpr` ADT → `TsEmitter` → TS string. Used by `api/` to generate TS types for `app/`.
-- `external/fsrs4s` — Scala 3 FSRS-6 spaced repetition scheduler (`org.bargsten::fsrs4s`). Core types: `Scheduler`, `Card`, `Parameters`, `Rating`, `Review`. Used by `api/`'s `learn/` feature.
-
 ## Style Rules (apply to all output: code, comments, docs, commit messages)
 
 - Be succinct. Say it once, say it short.
@@ -112,18 +91,7 @@ External source checkouts under `external/` for reading — do not edit:
 
 ## Finishing a task
 
-- Tests and integration tests must pass before marking work done. See the `testing-discipline` skill for sbt/vitest commands.
-
-## Skills
-
-Task-specific guidance lives in skills, loaded on demand. Invoke based on what you're doing:
-
-- `frontend-conventions` — editing files under `app/` (Svelte 5 runes, shadcn, Tailwind, component sizing, TS strict)
-- `backend-conventions` — editing files under `api/` (Doobie patterns, route/service split, DTOs, auth, Sec suffix, package naming)
-- `testing-discipline` — writing/fixing tests or reproducing a bug
-- `api-design` — designing HTTP routes or public function signatures
-- `scala3-syntax` — any `.scala` file
-- `doobie-reference`, `zio-http-reference`, `valacc-reference` — exact API lookups for those libraries
+- Tests must pass before marking work done.
 
 ## Safety
 

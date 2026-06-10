@@ -5,14 +5,16 @@ class Stage:
         self.name = name
 
     def __rshift__(self, other):
-        pass
+        return other
+
     def __rrshift__(self, other):
-        pass
+        return other
 
 class DAG:
     def __init__(self):
+        pass
 
-    def __rshift__(self, other):
-        pass
-    def __rrshift__(self, other):
-        pass
+    def __rshift__(self, other: "DAG | Stage | list[Stage]"):
+        return other
+    def __rrshift__(self, other: "DAG | Stage | list[Stage]"):
+        return other

@@ -1,7 +1,7 @@
 [project]
-name = "very-tiny-dag-framework"
+name = "vtdf"
 version = "0.1.0"
-description = "What the name says"
+description = "very-tiny-dag-framework"
 readme = "README.md"
 authors = [
     { name = "Joachim Bargsten", email = "jw@bargsten.org" }
@@ -20,3 +20,8 @@ norecursedirs = [
 
 [tool.ruff]
 line-length=111
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

@@ -9,3 +9,6 @@ idx: index
 
 cc: index
 	claude
+
+test:
+	uv run pytest -vvs tests/
