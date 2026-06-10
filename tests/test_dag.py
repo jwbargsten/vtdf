@@ -12,18 +12,22 @@ class MyContext:
 
 
 def make_recorder():
-    """Return (order, ctxs, factory) where factory(name) builds a recording Stage."""
+    """Return (order, calls, factory). Each recording Stage appends its name to
+    `order`, stores {"preds": tuple_of_predecessor_results, "ctx": ctx} under its
+    name in `calls`, and returns a tag `r_<name>` as its result."""
     order = []
-    ctxs = []
+    calls = {}
 
-    def factory(name, ctx):
-        def fn(c):
+    def factory(name, ctx=None):
+        def fn(*args):
+            *preds, c = args
             order.append(name)
-            ctxs.append(c)
+            calls[name] = {"preds": tuple(preds), "ctx": c}
+            return f"r_{name}"
 
         return Stage(name, fn, ctx)
 
-    return order, ctxs, factory
+    return order, calls, factory
 
 
 def before(order, x, y):
@@ -32,15 +36,7 @@ def before(order, x, y):
 
 def test_dag():
     ctx = MyContext(learning_rate=0.3, max_iter=100)
-
-    def fn(name):
-        return lambda c: None
-
-    a = Stage("a", fn("a"), ctx)
-    b = Stage("b", fn("b"), ctx)
-    c = Stage("c", fn("c"), ctx)
-    d = Stage("d", fn("d"), ctx)
-    e = Stage("e", fn("e"), ctx)
+    a, b, c, d, e = (Stage(n, lambda *args: None, ctx) for n in "abcde")
 
     res = [a, b] >> c >> [d, e]
     res.run()
@@ -70,14 +66,61 @@ def test_linear_chain():
     assert order == ["a", "b", "c"]
 
 
+def test_results_thread_along_chain():
+    order, calls, mk = make_recorder()
+    a, b, c = (mk(n) for n in "abc")
+
+    out = (a >> b >> c).run(ctx="CTX")
+
+    assert calls["a"]["preds"] == ()  # source stage: only ctx
+    assert calls["b"]["preds"] == ("r_a",)
+    assert calls["c"]["preds"] == ("r_b",)
+    assert out == "r_c"  # last job's result
+
+
+def test_fan_in_passes_results_in_order():
+    _, calls, mk = make_recorder()
+    a, b, c = (mk(n) for n in "abc")
+
+    ([a, b] >> c).run()
+
+    assert calls["c"]["preds"] == ("r_a", "r_b")
+
+
+def test_fan_out_shares_predecessor_result():
+    _, calls, mk = make_recorder()
+    a, d, e = (mk(n) for n in "ade")
+
+    (a >> [d, e]).run()
+
+    assert calls["d"]["preds"] == ("r_a",)
+    assert calls["e"]["preds"] == ("r_a",)
+
+
+def test_run_returns_single_sink_result():
+    a = Stage("a", lambda ctx: 1)
+    b = Stage("b", lambda ra, ctx: ra + 10)
+
+    assert (a >> b).run() == 11
+
+
+def test_run_returns_tuple_for_multiple_sinks():
+    a = Stage("a", lambda ctx: 1)
+    d = Stage("d", lambda ra, ctx: ra + 1)
+    e = Stage("e", lambda ra, ctx: ra + 2)
+
+    assert (a >> [d, e]).run() == (2, 3)
+
+
 def test_ctx_passed_to_each_stage():
     ctx = MyContext(0.3, 100)
-    order, ctxs, mk = make_recorder()
+    order, calls, mk = make_recorder()
     a, b = mk("a", ctx), mk("b", ctx)
 
     (a >> b).run()
 
-    assert ctxs == [ctx, ctx]
+    assert calls["a"]["ctx"] == ctx
+    assert calls["b"]["ctx"] == ctx
 
 
 def test_each_stage_runs_once():
@@ -96,7 +139,7 @@ def test_cycle_detected():
     a, b = mk("a", ctx), mk("b", ctx)
 
     dag = DAG()
-    dag.deps = {a: {b}, b: {a}}
+    dag.deps = {a: [b], b: [a]}
 
     with pytest.raises(ValueError, match="cycle"):
         dag.run()
@@ -127,22 +170,14 @@ def test_sub_dags_compose():
 
 
 def test_run_ctx_with_stage_override():
-    order, ctxs, mk = make_recorder()
+    _, calls, mk = make_recorder()
     a = mk("a", None)  # no ctx -> takes run() ctx
     b = mk("b", "override")  # carries its own ctx
 
     (a >> b).run(ctx="run")
 
-    assert ctxs == ["run", "override"]
-
-
-def test_run_returns_results_by_name():
-    a = Stage("a", lambda c: 1, None)
-    b = Stage("b", lambda c: 2, None)
-
-    out = (a >> b).run()
-
-    assert out == {"a": 1, "b": 2}
+    assert calls["a"]["ctx"] == "run"
+    assert calls["b"]["ctx"] == "override"
 
 
 def test_stage_decorator_bare():
@@ -152,7 +187,7 @@ def test_stage_decorator_bare():
 
     assert isinstance(load, Stage)
     assert load.name == "load"
-    assert load.run("c") == "c"
+    assert load.run(ctx="c") == "c"
 
 
 def test_stage_decorator_parameterized():
@@ -171,7 +206,7 @@ def test_static_stage_returns_value():
 
 def test_static_stage_in_composition():
     out = (Stage("x", 1) >> Stage("y", [1, 2])).run()
-    assert out == {"x": 1, "y": [1, 2]}
+    assert out == [1, 2]  # last job `y` is static
 
 
 def test_stage_factory_static_value():
@@ -189,9 +224,9 @@ def test_stage_factory_and_composition():
     def load(ctx):
         return 1
 
-    def train(ctx):
-        return 2
+    def train(prev, ctx):
+        return prev + 1
 
     out = (stage(load) >> stage(train)).run()
 
-    assert out == {"load": 1, "train": 2}
+    assert out == 2
