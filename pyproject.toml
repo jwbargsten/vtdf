@@ -25,3 +25,7 @@ line-length=111
 dev = [
     "pytest>=9.0.3",
 ]
+
+[tool.basedpyright]
+reportUnusedCallResult = false
+

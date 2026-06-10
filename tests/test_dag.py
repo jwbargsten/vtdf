@@ -20,6 +20,7 @@ def make_recorder():
         def fn(c):
             order.append(name)
             ctxs.append(c)
+
         return Stage(name, fn, ctx)
 
     return order, ctxs, factory
@@ -110,7 +111,7 @@ def test_composition_is_non_destructive():
     left = base >> c
     right = base >> d
 
-    assert set(base.deps) == {a, b}          # reused operand untouched
+    assert set(base.deps) == {a, b}  # reused operand untouched
     assert set(left.deps) == {a, b, c}
     assert set(right.deps) == {a, b, d}
 
@@ -127,8 +128,8 @@ def test_sub_dags_compose():
 
 def test_run_ctx_with_stage_override():
     order, ctxs, mk = make_recorder()
-    a = mk("a", None)                        # no ctx -> takes run() ctx
-    b = mk("b", "override")                  # carries its own ctx
+    a = mk("a", None)  # no ctx -> takes run() ctx
+    b = mk("b", "override")  # carries its own ctx
 
     (a >> b).run(ctx="run")
 
@@ -162,6 +163,26 @@ def test_stage_decorator_parameterized():
     assert isinstance(fit, Stage)
     assert fit.name == "train"
     assert fit.run() == "cfg"
+
+
+def test_static_stage_returns_value():
+    assert Stage("const", 42).run() == 42
+
+
+def test_static_stage_in_composition():
+    out = (Stage("x", 1) >> Stage("y", [1, 2])).run()
+    assert out == {"x": 1, "y": [1, 2]}
+
+
+def test_stage_factory_static_value():
+    s = stage(42, name="seed")
+    assert isinstance(s, Stage)
+    assert s.run() == 42
+
+
+def test_stage_factory_static_value_requires_name():
+    with pytest.raises(ValueError, match="explicit name"):
+        stage(42)
 
 
 def test_stage_factory_and_composition():

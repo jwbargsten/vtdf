@@ -113,6 +113,11 @@ Skip zcs when:
 - No tactical DDD patterns or hexagonal architecture unless explicitly requested.
 - If you don't know a library, read its docs or source on GitHub. Don't guess the API.
 
+## Types
+
+- Type checker is `basedpyright`.
+- Be relaxed about types: add them when straightforward, don't contort code to satisfy the checker.
+
 ## Finishing a task
 
 - Tests must pass before marking work done.

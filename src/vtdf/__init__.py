@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from collections import deque
 from collections.abc import Callable
+from graphlib import TopologicalSorter
 from typing import Any, TypeAlias, overload
 
 Ctx: TypeAlias = Any
@@ -13,12 +13,17 @@ Operand: TypeAlias = "Stage | list[Stage] | DAG"
 
 
 class Stage:
-    def __init__(self, name: str, fn: StageFn, ctx: Ctx | None = None) -> None:
+    """Wraps `fn(ctx)`. If `fn` is not callable it is a static stage whose
+    result is `fn` itself, ignoring ctx."""
+
+    def __init__(self, name: str, fn: StageFn | Any, ctx: Ctx | None = None) -> None:
         self.name = name
         self.fn = fn
         self.ctx = ctx
 
     def run(self, ctx: Ctx | None = None) -> Any:
+        if not callable(self.fn):  # static stage: result is the value itself
+            return self.fn
         return self.fn(self.ctx if self.ctx is not None else ctx)
 
     def __rshift__(self, other: Operand) -> DAG:
@@ -32,17 +37,18 @@ class Stage:
 
 
 @overload
-def stage(fn: StageFn, *, name: str | None = ..., ctx: Ctx | None = ...) -> Stage: ...
+def stage(fn: StageFn | Any, *, name: str | None = ..., ctx: Ctx | None = ...) -> Stage: ...
 @overload
 def stage(fn: None = ..., *, name: str | None = ..., ctx: Ctx | None = ...) -> Callable[[StageFn], Stage]: ...
 def stage(
-    fn: StageFn | None = None,
+    fn: StageFn | Any | None = None,
     *,
     name: str | None = None,
     ctx: Ctx | None = None,
 ) -> Stage | Callable[[StageFn], Stage]:
     """Wrap a function `fn(ctx)` into a Stage, like Dask's `delayed`. The stage
-    name defaults to the function's `__name__`.
+    name defaults to the function's `__name__`. A non-callable `fn` becomes a
+    static stage and then needs an explicit `name`.
 
     Usable bare or parameterized::
 
@@ -53,9 +59,14 @@ def stage(
         def fit(ctx): ...
 
         s = stage(load, ctx=cfg)
+        const = stage(42, name="seed")
     """
-    def make(f: StageFn) -> Stage:
-        return Stage(name or f.__name__, f, ctx)
+
+    def make(f: StageFn | Any) -> Stage:
+        n = name or getattr(f, "__name__", None)
+        if n is None:
+            raise ValueError("static stage requires an explicit name")
+        return Stage(n, f, ctx)
 
     return make(fn) if fn is not None else make
 
@@ -73,23 +84,9 @@ class DAG:
         return {s.name: s.run(ctx) for s in self._toposort()}
 
     def _toposort(self) -> list[Stage]:
-        indeg = {s: len(preds) for s, preds in self.deps.items()}
-        succ: dict[Stage, list[Stage]] = {s: [] for s in self.deps}
-        for s, preds in self.deps.items():
-            for p in preds:
-                succ[p].append(s)
-        queue = deque(s for s, d in indeg.items() if d == 0)
-        order: list[Stage] = []
-        while queue:
-            s = queue.popleft()
-            order.append(s)
-            for t in succ[s]:
-                indeg[t] -= 1
-                if indeg[t] == 0:
-                    queue.append(t)
-        if len(order) != len(self.deps):
-            raise ValueError("cycle detected in DAG")
-        return order
+        # deps maps each stage to its predecessors — exactly TopologicalSorter's
+        # input shape. CycleError subclasses ValueError with a "cycle" message.
+        return list(TopologicalSorter(self.deps).static_order())
 
     def __rshift__(self, other: Operand) -> DAG:
         return _compose(self, other)
