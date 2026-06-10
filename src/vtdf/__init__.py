@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, overload
 
 Ctx: TypeAlias = Any
 StageFn: TypeAlias = Callable[[Ctx], Any]
@@ -29,6 +29,35 @@ class Stage:
 
     def __repr__(self) -> str:
         return f"Stage({self.name!r})"
+
+
+@overload
+def stage(fn: StageFn, *, name: str | None = ..., ctx: Ctx | None = ...) -> Stage: ...
+@overload
+def stage(fn: None = ..., *, name: str | None = ..., ctx: Ctx | None = ...) -> Callable[[StageFn], Stage]: ...
+def stage(
+    fn: StageFn | None = None,
+    *,
+    name: str | None = None,
+    ctx: Ctx | None = None,
+) -> Stage | Callable[[StageFn], Stage]:
+    """Wrap a function `fn(ctx)` into a Stage, like Dask's `delayed`. The stage
+    name defaults to the function's `__name__`.
+
+    Usable bare or parameterized::
+
+        @stage
+        def load(ctx): ...
+
+        @stage(name="train", ctx=cfg)
+        def fit(ctx): ...
+
+        s = stage(load, ctx=cfg)
+    """
+    def make(f: StageFn) -> Stage:
+        return Stage(name or f.__name__, f, ctx)
+
+    return make(fn) if fn is not None else make
 
 
 class DAG:

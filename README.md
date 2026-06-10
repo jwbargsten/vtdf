@@ -36,6 +36,27 @@ results = dag.run()   # {"a": ..., "b": ..., "c": ..., "d": ..., "e": ...}
 
 `run()` returns a `dict` mapping each stage name to its return value.
 
+### Creating stages with `stage`
+
+Like Dask's `delayed`, the `stage` decorator/factory wraps a `fn(ctx)` into a
+`Stage`, defaulting the name to the function's `__name__`:
+
+```python
+from vtdf import stage
+
+@stage
+def load(ctx):
+    return ctx.path
+
+@stage(name="train", ctx=cfg)
+def fit(ctx):
+    ...
+
+pipeline = load >> fit
+```
+
+It can also be called directly: `stage(load, ctx=cfg)`.
+
 ## How it works
 
 ### Data model
@@ -88,3 +109,21 @@ stage name.
 
 Execution is currently sequential; the topological order respects all
 dependencies, and parallel branches are simply emitted in an unspecified order.
+
+## Similar packages
+
+- [`graphlib.TopologicalSorter`](https://docs.python.org/3/library/graphlib.html)
+  — standard library (Python 3.9+). It does exactly the Kahn-style toposort
+  `_toposort` reimplements, and even supports `get_ready()`/`done()` for parallel
+  scheduling. The piece `vtdf` adds on top is the `Stage` wrapper + `>>`
+  composition sugar; the graph engine itself is already in stdlib.
+- [Dask `delayed`](https://docs.dask.org/en/stable/delayed.html) / dask graphs —
+  builds a lazy compute graph and executes it (with real parallelism). Heavier,
+  but conceptually the same "wrap functions, declare deps, run in order."
+- Smaller PyPI packages in this exact niche:
+  [`daglib`](https://pypi.org/project/daglib/),
+  [`pydags`](https://pypi.org/project/pydags/),
+  [`schedula`](https://pypi.org/project/schedula/),
+  [`pyungo`](https://pypi.org/project/pyungo/),
+  [`fn_graph`](https://pypi.org/project/fn-graph/) — most use decorators or
+  `requires()`-style wiring rather than `>>`.

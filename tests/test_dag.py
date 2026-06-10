@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from vtdf import DAG, Stage
+from vtdf import DAG, Stage, stage
 
 
 @dataclass(frozen=True)
@@ -142,3 +142,35 @@ def test_run_returns_results_by_name():
     out = (a >> b).run()
 
     assert out == {"a": 1, "b": 2}
+
+
+def test_stage_decorator_bare():
+    @stage
+    def load(ctx):
+        return ctx
+
+    assert isinstance(load, Stage)
+    assert load.name == "load"
+    assert load.run("c") == "c"
+
+
+def test_stage_decorator_parameterized():
+    @stage(name="train", ctx="cfg")
+    def fit(ctx):
+        return ctx
+
+    assert isinstance(fit, Stage)
+    assert fit.name == "train"
+    assert fit.run() == "cfg"
+
+
+def test_stage_factory_and_composition():
+    def load(ctx):
+        return 1
+
+    def train(ctx):
+        return 2
+
+    out = (stage(load) >> stage(train)).run()
+
+    assert out == {"load": 1, "train": 2}
