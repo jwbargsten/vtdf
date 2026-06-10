@@ -1,0 +1,22 @@
+[project]
+name = "very-tiny-dag-framework"
+version = "0.1.0"
+description = "What the name says"
+readme = "README.md"
+authors = [
+    { name = "Joachim Bargsten", email = "jw@bargsten.org" }
+]
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+norecursedirs = [
+    "tests/testkit"
+]
+
+[tool.ruff]
+line-length=111
