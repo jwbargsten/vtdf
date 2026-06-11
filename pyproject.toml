@@ -28,4 +28,5 @@ dev = [
 
 [tool.basedpyright]
 reportUnusedCallResult = false
+reportUnusedExpression = false
 
