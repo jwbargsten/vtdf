@@ -1,3 +1,5 @@
+import asyncio
+import time
 from dataclasses import dataclass
 
 import pytest
@@ -295,3 +297,88 @@ def test_duplicate_name_across_stage_and_artifact_rejected():
     art = Artifact("dup", "gs://b/x")
     with pytest.raises(ValueError, match="duplicate node name"):
         s >> art
+
+
+def test_run_async_parity():
+    async def load(ctx):
+        return 1
+
+    async def add(prev, ctx):
+        return prev + 10
+
+    a, b = Stage("a", load), Stage("b", add)
+    assert asyncio.run((a >> b).run_async()) == 11
+
+
+def test_run_collect_async_returns_all_outputs():
+    async def load(ctx):
+        return 1
+
+    async def inc(prev, ctx):
+        return prev + 1
+
+    async def inc2(prev, ctx):
+        return prev + 2
+
+    a = Stage("a", load)
+    d, e = Stage("d", inc), Stage("e", inc2)
+    assert asyncio.run((a >> [d, e]).run_collect_async()) == {"a": 1, "d": 2, "e": 3}
+
+
+def test_run_async_independent_stages_run_concurrently():
+    barrier = asyncio.Barrier(2)
+
+    async def src(ctx):
+        return None
+
+    async def fan(_r, ctx):
+        await barrier.wait()  # only releases when both d and e are waiting
+        return "ok"
+
+    a = Stage("a", src)
+    d, e = Stage("d", fan), Stage("e", fan)
+
+    async def go():
+        return await asyncio.wait_for((a >> [d, e]).run_async(), timeout=1)
+
+    assert asyncio.run(go()) == ("ok", "ok")
+
+
+def test_run_async_warns_on_sync_stage():
+    a = Stage("a", lambda ctx: 1)
+    b = Stage("b", lambda prev, ctx: prev + 10)
+
+    async def go():
+        return await (a >> b).run_async()
+
+    with pytest.warns(UserWarning, match="no concurrency"):
+        assert asyncio.run(go()) == 11
+
+
+def test_run_async_sleepers_run_concurrently():
+    async def sleeper(ctx):
+        await asyncio.sleep(1)
+        return "slept"
+
+    async def c(ra, rb, ctx):
+        return (ra, rb)
+
+    a, b = Stage("a", sleeper), Stage("b", sleeper)
+    sink = Stage("c", c)
+
+    start = time.monotonic()
+    out = asyncio.run(([a, b] >> sink).run_async())
+    elapsed = time.monotonic() - start
+
+    assert out == ("slept", "slept")
+    assert elapsed < 1.3  # concurrent: ~1s, not ~2s
+
+
+def test_run_async_detects_cycle():
+    _, _, mk = make_recorder()
+    a, b = mk("a"), mk("b")
+    dag = DAG()
+    dag.deps = {a: [b], b: [a]}
+
+    with pytest.raises(ValueError, match="cycle"):
+        asyncio.run(dag.run_async())
