@@ -5,9 +5,11 @@ Airflow-style `>>` syntax, then runs them in dependency order.
 
 ## Overview
 
-A `Stage(name, fn, ctx)` wraps a function `fn(ctx)`. `ctx` is an immutable
-object (a frozen dataclass or dict) shared across stages; a stage may carry its
-own `ctx` to override the one passed to `run()`.
+A `Stage(name, fn, ctx)` wraps a function. A source stage is called `fn(ctx)`; a
+stage with predecessors is called `fn(*predecessor_results, ctx)` — its inputs in
+dependency order, then `ctx` last. `ctx` is an immutable object (a frozen
+dataclass or dict) shared across stages; a stage may carry its own `ctx` to
+override the one passed to `run()`.
 
 Stages compose with `>>`:
 
@@ -20,21 +22,30 @@ them). Composition returns a `DAG`, which is itself composable, so sub-graphs
 combine freely:
 
 ```python
-from dataclasses import dataclass
 from vtdf import Stage
 
-@dataclass(frozen=True)
-class Ctx:
-    learning_rate: float
+def source(ctx):       return 1
+def combine(x, y, ctx): return x + y   # fan-in: receives a and b results
+def inc(prev, ctx):     return prev + 1
 
-ctx = Ctx(learning_rate=0.3)
-a, b, c, d, e = (Stage(n, lambda c: n, ctx) for n in "abcde")
+a, b = Stage("a", source), Stage("b", source)
+c = Stage("c", combine)
+d, e = Stage("d", inc), Stage("e", inc)
 
 dag = [a, b] >> c >> [d, e]
-results = dag.run()   # {"a": ..., "b": ..., "c": ..., "d": ..., "e": ...}
+
+dag.run()          # -> (3, 3): the sink results (d, e), in sink order
+dag.run_collect()  # -> {"a": 1, "b": 1, "c": 2, "d": 3, "e": 3}
 ```
 
-`run()` returns a `dict` mapping each stage name to its return value.
+Two run methods, both taking an optional `ctx`:
+
+- `run()` returns the **last job's** result — the sole sink's value, or a tuple of
+  all sink values (in sink order) when there is more than one.
+- `run_collect()` returns a `dict` mapping **every** stage name to its result.
+
+Stage names must be unique within a DAG; composing a duplicate raises
+`ValueError`.
 
 ### Creating stages with `stage`
 
@@ -57,34 +68,104 @@ pipeline = load >> fit
 
 It can also be called directly: `stage(load, ctx=cfg)`.
 
+### Artifacts
+
+An `Artifact` is a remote resource — a GCS object, a BigQuery table — that sits in
+the DAG as a source or sink, next to stages. It carries a `name`, a `uri`, and
+optional `description` / `metadata`:
+
+```python
+from vtdf import Artifact
+
+dataset = Artifact(
+    name="training-dataset",
+    uri="gs://your-bucket/data/train.csv",
+    description="...",                  # optional
+    metadata={"rows": 50000, "version": "v2.3"},  # optional
+)
+```
+
+As a node, an artifact **yields itself**. So a consuming stage receives the
+`Artifact` (read its `uri`), and a producing stage's own result is ignored — the
+sink is the artifact:
+
+```python
+def load(dataset, ctx):
+    return read_csv(dataset.uri)        # dataset is the Artifact
+
+def train(rows, ctx):
+    return fit(rows)
+
+model = Artifact("model", "gs://your-bucket/models/m.pkl")
+
+dag = dataset >> Stage("load", load) >> Stage("train", train) >> model
+dag.run()  # -> the `model` Artifact (the sink)
+```
+
+Artifacts share the unique-name rule with stages and are hashed by identity.
+
+### Async execution and concurrency
+
+For DAGs of **remote jobs** — where each stage submits work and waits on the
+result — use the async API so independent branches run concurrently instead of
+one after another:
+
+- `run_async()` — async counterpart of `run()`.
+- `run_collect_async()` — async counterpart of `run_collect()`.
+
+A stage's `fn` may be `async def`. Independent nodes (e.g. the `[a, b]` in
+`[a, b] >> c`) are scheduled together and awaited concurrently:
+
+```python
+import asyncio
+from vtdf import Stage
+
+async def fetch(ctx):
+    return await remote_job(ctx)        # awaits the remote result
+
+a, b = Stage("a", fetch), Stage("b", fetch)
+async def merge(ra, rb, ctx): return (ra, rb)
+c = Stage("c", merge)
+
+asyncio.run(([a, b] >> c).run_async())  # a and b run concurrently, then c
+```
+
+**Use `async def` everywhere for full concurrency.** Concurrency only kicks in
+while a stage is `await`-ing. A plain `def` stage runs **inline** on the event
+loop under `run_async()` — it blocks every other branch until it returns, so it
+gains nothing and (worse) stalls stages that could otherwise overlap. `run_async`
+emits a warning when it encounters a sync stage. Mixed graphs still produce
+correct results; they just don't parallelize across the sync stages.
+
 ## How it works
 
 ### Data model
 
-A `DAG` holds a single field, `deps: dict[Stage, set[Stage]]`, mapping each
-stage to its set of predecessors (the stages that must run before it). That is
-the entire graph — there is no separate node list or mutable build cursor.
+A `DAG` holds a single field, `deps: dict[Node, list[Node]]`, mapping each node
+(a `Stage` or `Artifact`) to its predecessors in order (the nodes that must run
+before it). That is the entire graph — there is no separate node list or mutable
+build cursor.
 
 The **frontier** (where the next `>>` attaches) is *derived* from the graph as
-its sink stages: stages that appear as nobody's predecessor. Because the
+its sink nodes: nodes that appear as nobody's predecessor. Because the
 frontier is computed, never stored, a `DAG` is an immutable value — composition
 builds a new map and never mutates its operands, so a DAG can be reused or
 composed further freely.
 
 ### Composition (`>>`)
 
-Each operand — a `Stage`, a `list[Stage]`, or a `DAG` — is first `_normalize`d
-into a deps map:
+Each operand — a node (`Stage` or `Artifact`), a list of nodes, or a `DAG` — is
+first `_normalize`d into a deps map:
 
-- `Stage` → `{stage: ∅}`
-- `list[Stage]` → `{s: ∅ for s in list}` (parallel, no inter-dependencies)
+- node → `{node: ∅}`
+- `list` of nodes → `{n: ∅ for n in list}` (parallel, no inter-dependencies)
 - `DAG` → a fresh copy of its deps map
 
 `_compose(left, right)` then:
 
 1. Normalizes `left` into a new map `deps`.
-2. Computes `frontier = sinks(deps)` — the stages with no successors in `left`.
-3. Merges every stage of `right` into `deps`. Each **source** stage of `right`
+2. Computes `frontier = sinks(deps)` — the nodes with no successors in `left`.
+3. Merges every node of `right` into `deps`. Each **source** node of `right`
    (one with no predecessors of its own) gains the whole `frontier` as its
    predecessors; that is the edge that wires the two operands together.
 
@@ -94,29 +175,27 @@ chain `a → b → c → d`.
 
 ### Execution
 
-`run()` linearizes the graph with **Kahn's algorithm** (`_toposort`):
+Both run paths order the graph with the standard library's
+[`graphlib.TopologicalSorter`](https://docs.python.org/3/library/graphlib.html)
+over the `deps` map, which raises `graphlib.CycleError` (a `ValueError` whose
+message contains "cycle") on a cyclic graph. Each node is invoked with its own
+`ctx` if it carries one, otherwise the `ctx` passed to the run method.
 
-1. Compute the in-degree of each stage (its number of predecessors).
-2. Seed a queue with all zero-in-degree stages (the sources).
-3. Repeatedly pop a stage, append it to the order, and decrement the in-degree
-   of each successor; when a successor reaches zero, enqueue it.
-4. If the produced order is shorter than the stage count, a cycle exists →
-   raise `ValueError("cycle detected in DAG")`.
-
-Stages then run in that topological order, each invoked with its own `ctx` if it
-carries one, otherwise the `ctx` passed to `run()`. Results are collected by
-stage name.
-
-Execution is currently sequential; the topological order respects all
-dependencies, and parallel branches are simply emitted in an unspecified order.
+- **Sync** (`run` / `run_collect`) walks `static_order()` and runs nodes one at a
+  time, threading each result to its successors.
+- **Async** (`run_async` / `run_collect_async`) drives the sorter's *active* API
+  (`prepare` / `get_ready` / `done`): all currently-ready (independent) nodes are
+  scheduled as `asyncio` tasks at once and awaited as they complete, so
+  independent `async def` branches actually run concurrently. See
+  [Async execution and concurrency](#async-execution-and-concurrency).
 
 ## Similar packages
 
 - [`graphlib.TopologicalSorter`](https://docs.python.org/3/library/graphlib.html)
-  — standard library (Python 3.9+). It does exactly the Kahn-style toposort
-  `_toposort` reimplements, and even supports `get_ready()`/`done()` for parallel
-  scheduling. The piece `vtdf` adds on top is the `Stage` wrapper + `>>`
-  composition sugar; the graph engine itself is already in stdlib.
+  — standard library (Python 3.9+). `vtdf` uses it directly as its graph engine:
+  `static_order()` for the sync path and the `get_ready()`/`done()` active API for
+  concurrent async scheduling. What `vtdf` adds on top is the `Stage`/`Artifact`
+  wrappers, `>>` composition sugar, and the async run methods.
 - [Dask `delayed`](https://docs.dask.org/en/stable/delayed.html) / dask graphs —
   builds a lazy compute graph and executes it (with real parallelism). Heavier,
   but conceptually the same "wrap functions, declare deps, run in order."
