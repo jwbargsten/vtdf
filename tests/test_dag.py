@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from vtdf import DAG, Stage, stage
+from vtdf import DAG, Artifact, Stage, stage
 
 
 @dataclass(frozen=True)
@@ -145,6 +145,19 @@ def test_cycle_detected():
         dag.run()
 
 
+def test_duplicate_stage_name_rejected():
+    a, dup = Stage("a", lambda ctx: 1), Stage("a", lambda ra, ctx: ra)
+    with pytest.raises(ValueError, match="duplicate node name"):
+        a >> dup
+
+
+def test_run_collect_returns_all_outputs():
+    a = Stage("a", lambda ctx: 1)
+    d = Stage("d", lambda ra, ctx: ra + 1)
+    e = Stage("e", lambda ra, ctx: ra + 2)
+    assert (a >> [d, e]).run_collect() == {"a": 1, "d": 2, "e": 3}
+
+
 def test_composition_is_non_destructive():
     ctx = MyContext(0.3, 100)
     _, _, mk = make_recorder()
@@ -230,3 +243,55 @@ def test_stage_factory_and_composition():
     out = (stage(load) >> stage(train)).run()
 
     assert out == 2
+
+
+def test_artifact_fields():
+    art = Artifact(
+        name="training-dataset",
+        uri="gs://bucket/train.csv",
+        description="the dataset",
+        metadata={"rows": 50000, "version": "v2.3"},
+    )
+    assert (art.name, art.uri, art.description) == (
+        "training-dataset",
+        "gs://bucket/train.csv",
+        "the dataset",
+    )
+    assert art.metadata == {"rows": 50000, "version": "v2.3"}
+
+
+def test_artifact_metadata_defaults_empty():
+    art = Artifact("a", "gs://b/x")
+    assert art.description is None
+    assert art.metadata == {}
+
+
+def test_artifact_as_source_passed_to_stage():
+    _, calls, mk = make_recorder()
+    art = Artifact("ds", "gs://b/train.csv")
+    train = mk("train")
+
+    (art >> train).run()
+
+    assert calls["train"]["preds"] == (art,)
+
+
+def test_artifact_as_sink_is_run_result():
+    src = Stage("src", lambda ctx: 1)
+    out = Artifact("model", "gs://b/model.pkl")
+
+    assert (src >> out).run() is out
+
+
+def test_artifact_collected_by_name():
+    src = Stage("src", lambda ctx: 1)
+    out = Artifact("model", "gs://b/model.pkl")
+
+    assert (src >> out).run_collect()["model"] is out
+
+
+def test_duplicate_name_across_stage_and_artifact_rejected():
+    s = Stage("dup", lambda ctx: 1)
+    art = Artifact("dup", "gs://b/x")
+    with pytest.raises(ValueError, match="duplicate node name"):
+        s >> art
