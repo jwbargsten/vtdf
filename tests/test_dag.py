@@ -205,6 +205,16 @@ def test_stage_decorator_bare():
     assert load.run(ctx="c") == "c"
 
 
+def test_stage_decorator_still_callable():
+    @stage
+    def load(ctx):
+        return ctx
+
+    assert load("c") == "c"  # direct call hits fn
+    assert isinstance(load, Stage)  # and still a Stage
+    assert (load >> stage(lambda p, ctx: p)).run(ctx="c") == "c"  # still composes
+
+
 def test_stage_decorator_parameterized():
     @stage(name="train", ctx="cfg")
     def fit(ctx):

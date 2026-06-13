@@ -38,6 +38,14 @@ class Stage:
             return self.fn
         return self.fn(*results, self.ctx if self.ctx is not None else ctx)
 
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Invoke the wrapped function directly, so a `@stage`-decorated function
+        stays callable as a plain function. Unlike `run`, this passes args through
+        verbatim (no ctx injection) — it mirrors the original function's signature."""
+        if not callable(self.fn):
+            raise TypeError(f"static stage {self.name!r} is not callable")
+        return self.fn(*args, **kwargs)
+
     def __rshift__(self, other: Operand) -> DAG:
         return _compose(self, other)
 
